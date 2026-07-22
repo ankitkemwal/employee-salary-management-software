@@ -60,6 +60,7 @@ function buildFilterConditions(
     conditions.push(sql`(
       lower(${employees.firstName}) LIKE ${term}
       OR lower(${employees.lastName}) LIKE ${term}
+      OR lower(${employees.firstName} || ' ' || ${employees.lastName}) LIKE ${term}
       OR lower(${employees.email}) LIKE ${term}
       OR lower(${employees.employeeCode}) LIKE ${term}
     )`);

@@ -139,6 +139,22 @@ describe("listEmployees", () => {
     expect(bySearch.data[0].firstName).toBe("Bob");
   });
 
+  it("matches a combined 'first last' search term", async () => {
+    await employeeService.createEmployee(
+      makeEmployeeInput({ firstName: "Jane", lastName: "Doe" }),
+    );
+
+    const result = await employeeService.listEmployees({
+      status: "ACTIVE",
+      search: "jane doe",
+      page: 1,
+      pageSize: 25,
+    });
+
+    expect(result.data).toHaveLength(1);
+    expect(result.data[0].lastName).toBe("Doe");
+  });
+
   it("paginates results", async () => {
     for (let i = 0; i < 5; i++) {
       await employeeService.createEmployee(makeEmployeeInput());
