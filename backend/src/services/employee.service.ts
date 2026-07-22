@@ -12,9 +12,17 @@ import type {
 } from "../validation/employee.schema";
 
 function isUniqueConstraintError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  if (err.message.includes("UNIQUE constraint failed")) return true;
-  return err.cause instanceof Error && err.cause.message.includes("UNIQUE constraint failed");
+  // Deliberately duck-typed rather than `instanceof Error`: node:sqlite
+  // throws errors from a different realm than Jest's VM-sandboxed test
+  // context, so `instanceof` silently returns false there even though
+  // the error is a real Error with a real .message.
+  const message = (err as { message?: unknown } | null | undefined)?.message;
+  const causeMessage = (err as { cause?: { message?: unknown } } | null | undefined)?.cause
+    ?.message;
+  return (
+    (typeof message === "string" && message.includes("UNIQUE constraint failed")) ||
+    (typeof causeMessage === "string" && causeMessage.includes("UNIQUE constraint failed"))
+  );
 }
 
 async function nextEmployeeCode(): Promise<string> {
@@ -180,7 +188,7 @@ export async function createEmployee(input: CreateEmployeeInput) {
         reason: input.salary.reason ?? "Initial salary",
       });
 
-      const created = await tx.select().from(employees).where(eq(employees.id, id)).get();
+      const created = (await tx.select().from(employees).where(eq(employees.id, id)).get())!;
 
       await writeAuditLog(tx, {
         tableName: "employees",
@@ -227,7 +235,7 @@ export async function updateEmployee(id: string, input: UpdateEmployeeInput) {
   try {
     return await db.transaction(async (tx) => {
       await tx.update(employees).set(updates).where(eq(employees.id, id));
-      const updated = await tx.select().from(employees).where(eq(employees.id, id)).get();
+      const updated = (await tx.select().from(employees).where(eq(employees.id, id)).get())!;
 
       await writeAuditLog(tx, {
         tableName: "employees",

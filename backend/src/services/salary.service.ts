@@ -38,7 +38,7 @@ export async function addSalaryRecord(employeeId: string, input: CreateSalaryRec
       reason: input.reason,
     });
 
-    const created = await tx.select().from(salaryRecords).where(eq(salaryRecords.id, id)).get();
+    const created = (await tx.select().from(salaryRecords).where(eq(salaryRecords.id, id)).get())!;
 
     await writeAuditLog(tx, {
       tableName: "salary_records",
