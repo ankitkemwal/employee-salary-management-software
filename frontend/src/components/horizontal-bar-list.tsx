@@ -14,7 +14,7 @@ export function HorizontalBarList({ items, valueFormatter = String }: Horizontal
   return (
     <div className="flex flex-col gap-3">
       {items.map((item) => (
-        <div key={item.label} className="grid grid-cols-[minmax(0,7rem)_1fr_auto] items-center gap-3">
+        <div key={item.label} className="grid grid-cols-[minmax(0,9.5rem)_1fr_auto] items-center gap-3">
           <span className="truncate text-sm text-muted-foreground" title={item.label}>
             {item.label}
           </span>
