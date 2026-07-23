@@ -2,11 +2,9 @@
 
 Web application replacing ACME's Excel-based salary process for its HR team — a
 single source of truth for compensation data across 10,000 employees in
-multiple countries. Built as a take-home assessment.
+multiple countries.
 
-See [REQUIREMENTS.md](REQUIREMENTS.md) for the full requirements document:
-goals, scope, deliberate exclusions, architectural decisions, data model, and
-API contract.
+
 
 ## Stack
 
@@ -21,7 +19,6 @@ API contract.
 ```
 backend/    Express API, Drizzle schema, services, seed script, tests
 frontend/   React SPA (directory, employee detail, forms, dashboard)
-REQUIREMENTS.md   v1.0 requirements document
 ```
 
 ## Getting started

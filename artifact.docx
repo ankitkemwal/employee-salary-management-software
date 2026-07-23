@@ -1,0 +1,191 @@
+ACME Salary Management System
+
+Requirements, design decisions, architecture, trade-offs, performance
+considerations, and the AI-assisted build process, in one record. 
+
+---
+
+1. Brief
+
+ACME runs compensation for 10,000 employees across multiple countries out of
+a set of spreadsheets. Every lookup, update, or report means juggling files
+that don't talk to each other and carry no audit trail. The brief: replace
+that with a web application giving HR Managers one place to find, change,
+and report on salary data — fast.
+
+ | 
+User | HR Manager — comfortable with web apps, not a developer
+Scale | 10,000 employees · multi-country · ~20 concurrent HR users
+Key jobs | Look up a salary · update it · see its history · view org-level stats
+
+---
+
+2. Planning & Design Decisions
+
+
+Currency — no cross-currency math.
+Every salary record stores an amount and an ISO 4217 currency. Nothing is
+ever converted or summed across currencies — that would produce a number
+that looks precise and means nothing without a live FX feed. The dashboard
+groups every stat (payroll total, average) per currency instead. Honest over
+impressive; a conversion layer is a v2 problem once a real FX source exists.
+
+Salary history — append-only.
+A salary change inserts a new `salary_record` row with an effective date and
+an optional reason. The previous row is never touched. That gives a full
+audit trail for free, makes rollbacks trivial, and matches how payroll teams
+already think about compensation — as a timeline, not a single mutable
+field.
+
+Delete — soft only.
+Employees are never hard-deleted. A `status` field flips from `ACTIVE` to
+`INACTIVE`, preserving salary history and audit logs underneath. The
+directory shows active employees by default, with a toggle to see inactive
+ones.
+
+Auth — mock single session.
+A hardcoded HR Manager session is assumed — no login, no tokens.
+`created_by` / `actor` fields are stamped `"hr-manager"`. The schema already
+carries an actor field on every write, so real auth (OAuth/SSO) slots into
+onboarding without a data-model change.
+
+---
+
+3. Scope
+
+In scope
+
+Employee directory | Replaces the main Excel sheet | Must
+Add / edit / soft-delete | Core CRUD — records are never destroyed | Must
+Salary history per employee | Append-only log, every change preserved | Must
+Search & filter | By name, department, country, employment type, salary range | Must
+
+Deliberately left out
+
+Leave records & LWP | Separate attendance/leave domain — explicit exclusion
+Appraisal workflows | A salary change from a review is just a new record, reason = "Annual Review"
+Payroll & payslips | This system manages data; tax/deductions are a payroll engine's job
+Role-based access | Single HR Manager role assumed for this assessment
+Currency conversion | Needs a live FX feed; grouping by currency is safe and correct today
+Native mobile app | Web only per brief; responsive layout covers the gap
+
+---
+
+4. Technical Choices
+
+ | 
+Backend | Node.js 20 + Express + TypeScript
+ORM | Drizzle — type-safe, SQL-first, no hidden query generation
+Database | SQLite for the assessment — zero-config, file-based, swaps to Postgres via one Drizzle config change
+Frontend | React 18 + Vite + Tailwind CSS + TypeScript
+UI primitives | shadcn/ui — accessible, unstyled, no vendor lock-in
+Validation | Zod, enforced at the route boundary
+Testing | Jest + Supertest against the service layer — fast, deterministic, no browser
+Seed data | Faker.js — 10,000 employees · 15 departments · 20 countries
+Deploy | Vercel (frontend) + Railway (backend)
+
+---
+
+5. Architecture
+
+
+Data model
+
+Table | Key fields | Notes
+`employees` | `id · employee_code · first/last_name · email · department · job_title · country · employment_type · hire_date · status` | Unique index on `employee_code` and `email`; indexed on `department`, `country`, `status`
+`salary_records` | `id · employee_id (FK) · amount · currency · effective_date · reason · created_by` | Never updated or deleted — indexed on `employee_id` and `effective_date`
+`audit_logs` | `id · table_name · record_id · action · actor · changed_at · before/after_snapshot (JSON)` | Composite index on `(table_name, record_id)`
+
+API routes
+
+Method | Endpoint | Description
+GET | `/api/employees` | Paginated, filtered list — search, dept, country, employment type, salary range, status
+POST | `/api/employees` | Create employee + initial salary in one transaction
+GET | `/api/employees/:id` | Single employee + current salary
+PUT | `/api/employees/:id` | Update employee fields
+DELETE | `/api/employees/:id` | Soft-delete → status = INACTIVE
+GET | `/api/employees/:id/salary` | Full salary history, newest first
+POST | `/api/employees/:id/salary` | Append a new salary record
+GET | `/api/employees/export` | CSV of the current filtered view, unpaginated
+GET | `/api/dashboard/stats` | Headcount, payroll, avg salary — by currency/dept/country
+
+---
+
+6. Trade-off Explanations
+
+
+Database | SQLite | Postgres from day one | Zero-config for an assessment; Drizzle keeps the swap a config change, not a rewrite
+ORM | Drizzle | Prisma / TypeORM | SQL-first and type-safe with no code generation step or hidden query magic to debug
+Latest salary lookup | Window-function CTE | A denormalized "current_salary" column on employees | Zero risk of the column drifting out of sync with history; cost is a join computed on every read (see §7)
+Salary changes | Append new row | Update the existing salary field | Audit trail and rollback come for free; matches how payroll actually reasons about comp over time
+Deletion | Soft delete (status flip) | Hard delete | Keeps salary history and audit logs intact under a record that's merely inactive
+Auth | Mock single session | Real OAuth/SSO | Out of scope for the assessment; every write already carries an actor field so real auth is additive, not structural
+Currency | Group by currency, no conversion | Convert everything to one reporting currency | A converted total without a live FX feed is a precise-looking wrong number
+Bulk import | Descoped | CSV import in v1 | Kept initial delivery focused; API/model already accept the same shape a bulk import would use
+
+---
+
+7. Performance Considerations
+
+What's fast because it was designed that way, and the one thing worth
+watching as data grows.
+
+•	Indexed lookups — handled. Unique indexes on `employee_code` and
+  `email`; standard indexes on `department`, `country`, and `status` — the
+  four fields every directory filter hits. Filtered list queries stay
+  index-backed at 10,000 rows and well beyond.
+
+•	Pagination without a serial round-trip — handled. The employee list
+  runs its `LIMIT/OFFSET` page query and its `COUNT` total query
+  concurrently via `Promise.all`, instead of awaiting one after the other.
+  A paginated list request costs one query's worth of latency, not two.
+
+•	Current-salary CTE scans the full history table — watchpoint. Every
+  list, detail, export, and dashboard query joins against a
+  `ROW_NUMBER() OVER (PARTITION BY employee_id ORDER BY effective_date DESC)`
+  CTE to find each employee's latest salary — SQLite has no native "latest
+  row per group" join. That CTE re-ranks all of `salary_records`, not just
+  the current page. At 10,000 employees with a handful of salary revisions
+  each, the full re-rank is still a sub-scale in-memory sort. Once salary
+  history grows into the hundreds of thousands of rows (multi-year history
+  at scale), this becomes the first thing to optimize — either a
+  materialized "current salary" pointer updated on write, or a covering
+  index on `(employee_id, effective_date DESC)`.
+
+•	Name search can't use an index — watchpoint. Search matches
+  `lower(first_name || ' ' || last_name) LIKE '%term%'` so a combined "first
+  last" query still matches. A leading-wildcard `LIKE` over a computed
+  expression can't use a B-tree index. 10,000 rows is a fast full scan in
+  SQLite; an FTS5 virtual table or trigram index is the next step if the
+  employee count grows an order of magnitude.
+
+•	Seed performance — handled. The 10,000-row seed uses raw prepared
+  statements inside a single transaction rather than the ORM's per-row
+  insert path, so seeding completes in about a second instead of one commit
+  per row.
+
+•	Concurrency assumption — handled. SQLite is single-writer. The brief
+  specifies ~20 concurrent HR users doing mostly reads and occasional
+  writes — comfortably within SQLite's envelope. The Postgres swap path
+  exists for when that assumption changes.
+
+---
+
+8. Prompts & AI-Assisted Process
+
+1. Goal
+Replace ACME's Excel-based salary process with a web application that
+gives HR Managers a single source of truth for compensation data
+across 10,000 employees in multiple countries...
+
+3. Architectural Decisions
+These are choices I own. Each one is a deliberate call, not a default.
+
+6. Technical Choices
+Backend: Node.js 20 + Express + TypeScript
+ORM: Drizzle — lightweight, type-safe, SQL-first...
+
+7. Architecture
+[three-tier diagram + data model + API routes — see §5 above]
+
+
